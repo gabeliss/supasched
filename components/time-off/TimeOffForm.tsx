@@ -13,18 +13,19 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '
 import { Input } from '../ui/input';
 import { Button } from '../ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
+import { Textarea } from '../ui/textarea';
 import { Tables } from '../../lib/supabase/client';
 
-// Type for availability data
-type Availability = Tables<'availability'>;
+// Type for time-off data
 type TimeOff = Tables<'time_off'>;
 
 // Schema for form validation - following separation of concerns principle
-const availabilityFormSchema = z.object({
+const timeOffFormSchema = z.object({
   startTime: z.string()
     .min(1, { message: 'Start time is required' }),
   endTime: z.string()
     .min(1, { message: 'End time is required' }),
+  reason: z.string().optional(),
   recurrence: z.enum(['none', 'daily', 'weekly'], {
     required_error: 'Please select a recurrence pattern',
   }),
@@ -37,77 +38,68 @@ const availabilityFormSchema = z.object({
 });
 
 // Type for the form data based on the schema
-type AvailabilityFormValues = z.infer<typeof availabilityFormSchema>;
+type TimeOffFormValues = z.infer<typeof timeOffFormSchema>;
 
 // Props for the component - focusing on clear interfaces
-interface AvailabilityFormProps {
+interface TimeOffFormProps {
   onSuccess: () => void;
-  initialValues?: AvailabilityFormValues;
-  availabilityToEdit?: Availability | null;
+  initialValues?: TimeOffFormValues;
+  timeOffToEdit?: TimeOff | null;
 }
 
 // Default values for the form
-const defaultValues: AvailabilityFormValues = {
+const defaultValues: TimeOffFormValues = {
   startTime: '',
   endTime: '',
+  reason: '',
   recurrence: 'none',
 };
 
-export function AvailabilityForm({ onSuccess, initialValues = defaultValues, availabilityToEdit }: AvailabilityFormProps) {
+export function TimeOffForm({ onSuccess, initialValues = defaultValues, timeOffToEdit }: TimeOffFormProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [allAvailabilities, setAllAvailabilities] = useState<Availability[]>([]);
   const [allTimeOffs, setAllTimeOffs] = useState<TimeOff[]>([]);
-  const isEditing = !!availabilityToEdit;
+  const isEditing = !!timeOffToEdit;
   
-  // Fetch all availabilities and time-offs for conflict checking
+  // Fetch all time-offs for conflict checking
   useEffect(() => {
-    async function fetchData() {
+    async function fetchTimeOffs() {
       try {
-        // Fetch availabilities
-        const { data: availData, error: availError } = await supabase
-          .from('availability')
-          .select('*')
-          .then(res => res);
-        
-        if (availError) throw availError;
-        setAllAvailabilities(availData || []);
-        
-        // Fetch time-offs for conflict checking
-        const { data: timeOffData, error: timeOffError } = await supabase
+        const { data, error } = await supabase
           .from('time_off')
           .select('*')
           .then(res => res);
         
-        if (timeOffError) throw timeOffError;
-        setAllTimeOffs(timeOffData || []);
+        if (error) throw error;
+        setAllTimeOffs(data || []);
       } catch (err) {
-        console.error('Error fetching data:', err);
+        console.error('Error fetching time-offs:', err);
       }
     }
     
-    fetchData();
+    fetchTimeOffs();
   }, []);
   
-  // Set form values when editing an existing availability
+  // Set form values when editing an existing time-off entry
   useEffect(() => {
-    if (availabilityToEdit) {
+    if (timeOffToEdit) {
       // Format dates to local datetime string format for input elements
-      const startDate = new Date(availabilityToEdit.start_time);
-      const endDate = new Date(availabilityToEdit.end_time);
+      const startDate = new Date(timeOffToEdit.start_time);
+      const endDate = new Date(timeOffToEdit.end_time);
       
       const formattedStart = formatDateForInput(startDate);
       const formattedEnd = formatDateForInput(endDate);
       
       // Ensure recurrence is one of the allowed values
-      const recurrence = availabilityToEdit.recurrence as 'none' | 'daily' | 'weekly' || 'none';
+      const recurrence = timeOffToEdit.recurrence as 'none' | 'daily' | 'weekly' || 'none';
       
       form.reset({
         startTime: formattedStart,
         endTime: formattedEnd,
+        reason: timeOffToEdit.reason || '',
         recurrence: recurrence,
       });
     }
-  }, [availabilityToEdit]);
+  }, [timeOffToEdit]);
   
   // Helper function to format dates for datetime-local input
   function formatDateForInput(date: Date): string {
@@ -115,36 +107,26 @@ export function AvailabilityForm({ onSuccess, initialValues = defaultValues, ava
   }
   
   // Initialize form with react-hook-form and zod validation
-  const form = useForm<AvailabilityFormValues>({
-    resolver: zodResolver(availabilityFormSchema),
+  const form = useForm<TimeOffFormValues>({
+    resolver: zodResolver(timeOffFormSchema),
     defaultValues: initialValues,
   });
 
-  // Check for conflicts with existing availability slots
-  const checkForAvailabilityConflicts = (start: Date, end: Date, currentId?: string): boolean => {
-    return allAvailabilities.some(avail => {
-      // Skip the current availability when editing
-      if (currentId && avail.id === currentId) return false;
-      
-      const availStart = new Date(avail.start_time);
-      const availEnd = new Date(avail.end_time);
-      
-      return hasOverlap(start, end, availStart, availEnd);
-    });
-  };
-  
   // Check for conflicts with existing time-off slots
-  const checkForTimeOffConflicts = (start: Date, end: Date): boolean => {
-    return allTimeOffs.some(timeOff => {
-      const timeOffStart = new Date(timeOff.start_time);
-      const timeOffEnd = new Date(timeOff.end_time);
+  const checkForConflicts = (start: Date, end: Date, currentId?: string): boolean => {
+    return allTimeOffs.some(toff => {
+      // Skip the current time-off entry when editing
+      if (currentId && toff.id === currentId) return false;
       
-      return hasOverlap(start, end, timeOffStart, timeOffEnd);
+      const toffStart = new Date(toff.start_time);
+      const toffEnd = new Date(toff.end_time);
+      
+      return hasOverlap(start, end, toffStart, toffEnd);
     });
   };
 
   // Handle form submission
-  const onSubmit = async (values: AvailabilityFormValues) => {
+  const onSubmit = async (values: TimeOffFormValues) => {
     try {
       setIsSubmitting(true);
       
@@ -158,81 +140,50 @@ export function AvailabilityForm({ onSuccess, initialValues = defaultValues, ava
       const startTime = new Date(values.startTime);
       const endTime = new Date(values.endTime);
       
-      // Check for conflicts with other availability slots
-      const hasAvailabilityConflict = checkForAvailabilityConflicts(
+      // Check for conflicts
+      const hasConflict = checkForConflicts(
         startTime, 
         endTime,
-        availabilityToEdit?.id
+        timeOffToEdit?.id
       );
       
-      if (hasAvailabilityConflict) {
-        toast.error('This time slot conflicts with an existing availability slot');
+      if (hasConflict) {
+        toast.error('This time slot conflicts with an existing time-off slot');
         return;
       }
       
-      // Check for conflicts with time-off slots
-      const hasTimeOffConflict = checkForTimeOffConflicts(startTime, endTime);
-      
-      if (hasTimeOffConflict) {
-        toast.warning('This availability overlaps with your time off. Continue?', {
-          action: {
-            label: 'Continue Anyway',
-            onClick: () => saveAvailability(values, user.id, startTime, endTime),
-          },
-        });
-        return;
-      }
-      
-      // No conflicts, proceed with saving
-      await saveAvailability(values, user.id, startTime, endTime);
-      
-    } catch (error: any) {
-      console.error('Error saving availability:', error);
-      toast.error(`Error: ${error.message}`);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-  
-  // Helper function to save availability data
-  const saveAvailability = async (
-    values: AvailabilityFormValues,
-    therapistId: string,
-    startTime: Date,
-    endTime: Date
-  ) => {
-    try {
       // Format the data for insertion/update
-      const availabilityData = {
-        therapist_id: therapistId,
+      const timeOffData = {
+        therapist_id: user.id,
         start_time: startTime.toISOString(),
         end_time: endTime.toISOString(),
+        reason: values.reason || null,
         recurrence: values.recurrence === 'none' ? null : values.recurrence,
       };
       
       let result;
       
-      if (isEditing && availabilityToEdit) {
-        // Update existing availability
+      if (isEditing && timeOffToEdit) {
+        // Update existing time-off
         result = await supabase
-          .from('availability')
-          .update(availabilityData)
-          .eq('id', availabilityToEdit.id)
+          .from('time_off')
+          .update(timeOffData)
+          .eq('id', timeOffToEdit.id)
           .select('id')
           .single();
           
         if (result.error) throw result.error;
-        toast.success('Availability updated successfully');
+        toast.success('Time off updated successfully');
       } else {
-        // Insert new availability
+        // Insert new time-off
         result = await supabase
-          .from('availability')
-          .insert(availabilityData)
+          .from('time_off')
+          .insert(timeOffData)
           .select('id')
           .single();
           
         if (result.error) throw result.error;
-        toast.success('Availability added successfully');
+        toast.success('Time off added successfully');
       }
       
       // Call the success callback provided by the parent
@@ -241,16 +192,17 @@ export function AvailabilityForm({ onSuccess, initialValues = defaultValues, ava
       // Reset the form
       form.reset(defaultValues);
     } catch (error: any) {
-      console.error('Error saving availability:', error);
+      console.error('Error saving time off:', error);
       toast.error(`Error: ${error.message}`);
-      throw error; // Re-throw to be caught by the parent
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{isEditing ? 'Edit Availability' : 'Add Availability'}</CardTitle>
+        <CardTitle>{isEditing ? 'Edit Time Off' : 'Add Time Off'}</CardTitle>
       </CardHeader>
       <CardContent>
         <Form {...form}>
@@ -281,6 +233,23 @@ export function AvailabilityForm({ onSuccess, initialValues = defaultValues, ava
                   <FormControl>
                     <Input 
                       type="datetime-local" 
+                      {...field} 
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            
+            <FormField
+              control={form.control}
+              name="reason"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Reason (optional)</FormLabel>
+                  <FormControl>
+                    <Textarea 
+                      placeholder="Enter the reason for this time off..."
                       {...field} 
                     />
                   </FormControl>
